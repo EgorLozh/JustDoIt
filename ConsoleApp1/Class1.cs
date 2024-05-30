@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Data.SqlClient;
 using System.Linq;
 using System.Linq.Expressions;
+using System.Reflection;
 using System.Runtime.Remoting.Messaging;
 using System.Text;
 using System.Threading.Tasks;
@@ -61,89 +62,18 @@ namespace testing_class
             return repsonse;
         }
 
-    }
-
-    public class DB_object
-    {
-        public DataBase dataBase;
-        public string tableName;
-        public int? Id { get; set; }
-
-        public DB_object() { }
-
-        public DB_object(DataBase dataBase, string tableName, int? Id = null)
+        public List<DB_object> Read(Type table, Dictionary<string, string> conditions = null, int? limit = null)
         {
-            this.dataBase = dataBase;
-            this.tableName = tableName;
-            this.Id = Id;
-        }
-
-
-        public void Save()
-        {
-            var fields = new StringBuilder();
-            var values = new StringBuilder();
-            var obj_fields = this.GetType().GetProperties().ToArray();
-
-            foreach (var field in obj_fields)
+            var obj_properties = table.GetProperties().OrderBy(p => p.Name != "Id").ToArray();
+            var tableName = table.GetField("tableName", BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy).GetValue(table);
+            if (tableName==null)
             {
-                fields.Append("`" + field.Name.ToLower().ToString() + "`");
-                if (field.PropertyType != typeof(DateTime))
-                {
-                    values.Append("'" + field.GetValue(this) + "'");
-                }
-                else
-                {
-                    values.Append("'" + ((DateTime)field.GetValue(this)).ToString("yyyy-MM-dd HH:mm:ss") + "'");
-                }
-                if (field != obj_fields.Last())
-                {
-                    fields.Append(", ");
-                    values.Append(", ");
-                }
+                throw new ArgumentNullException("Inner field \"tableName\" didnt declare");
             }
-            var sql = $"INSERT INTO {this.tableName} ({fields.ToString()}) VALUES ({values.ToString()})";
-            this.dataBase.ExecuteCommand(sql);
-
-            sql = $"SELECT ID FROM `{tableName}` ORDER BY ID DESC LIMIT 1";            
-            var result = int.Parse(this.dataBase.GetResponse(sql)[0][0]);
-            typeof(DB_object).GetProperty("Id").SetValue(this, result);
-
-        }
-
-        public void Update()
-        {
-            var query = new StringBuilder();
-            var obj_fields = this.GetType().GetProperties().ToArray();
-            foreach (var field in obj_fields)
-            {
-                if (field.Name != "Id")
-                {
-                    query.Append("`" + field.Name.ToLower().ToString() + "`");
-                    query.Append("= '" + field.GetValue(this) + "'");
-                    if (field != obj_fields.Last())
-                    {
-                        query.Append(", ");
-                    }
-                }
-            }
-            var sql = $"UPDATE `{this.tableName}` SET {query.ToString()}  WHERE `{this.tableName}`.`id` = {this.Id}";
-            Console.WriteLine(sql);
-            this.dataBase.ExecuteCommand (sql);
-        }
-
-        public void Delite()
-        {
-            var sql = $"DELETE FROM `{this.tableName}` WHERE `{tableName}`.`id` = {this.GetType().GetProperty("Id").GetValue(this)}";
-            Console.WriteLine(sql);
-            this.dataBase.ExecuteCommand(sql);
-        }
-
-        public List<DB_object> Read(Dictionary<string, string> conditions = null, int? limit = null)
-        {
             var list = new List<DB_object>();
             var query = new StringBuilder();
-            var sql = $"SELECT * FROM `{this.tableName}`";
+            var dataBase = this;
+            var sql = $"SELECT * FROM `{tableName}`";
 
             if (conditions != null && conditions.Count > 0)
             {
@@ -151,7 +81,7 @@ namespace testing_class
                 {
                     query.Append($"`{condition}` = '{conditions[condition]}' AND ");
                 }
-                query.Length -= 5; // Удаление последнего " AND "
+                query.Length -= 5;
                 sql += " WHERE " + query;
             }
             if (limit != null)
@@ -159,16 +89,15 @@ namespace testing_class
                 sql += " LIMIT " + limit;
             }
 
-            var response = this.dataBase.GetResponse(sql);
-            var obj_fields = this.GetType().GetProperties().OrderBy(p => p.Name != "Id").ToArray();
+            var response = dataBase.GetResponse(sql);
 
             foreach (var item in response)
             {
-                var obj = (DB_object)Activator.CreateInstance(this.GetType());
+                var obj = (DB_object)Activator.CreateInstance(table);
 
                 for (int i = 0; i < item.Length; i++)
                 {
-                    var property = obj_fields[i];
+                    var property = obj_properties[i];
                     var value = item[i];
 
                     if (value != null && property.CanWrite)
@@ -206,12 +135,103 @@ namespace testing_class
                         }
                     }
                 }
-                obj.dataBase = this.dataBase;
-                obj.tableName = this.tableName;
+                obj.dataBase = dataBase;
                 list.Add(obj);
             }
 
             return list;
+        }
+
+        public void Delete(Type table, int id)
+        {
+            var tableName = table.GetField("tableName", BindingFlags.Public | BindingFlags.Static).GetValue(table);
+            if (tableName == null)
+            {
+                throw new ArgumentNullException("Inner field \"tableName\" didnt declare");
+            }
+            var sql = $"DELETE FROM `{tableName}` WHERE `{tableName}`.`id` = {id}";
+            this.ExecuteCommand(sql);
+        }
+
+    }
+
+    public class DB_object
+    {
+        public DataBase dataBase;
+        public int? Id { get; set; }
+
+        public DB_object() { }
+
+        public DB_object(DataBase dataBase, int? Id = null)
+        {
+            this.dataBase = dataBase;
+            this.Id = Id;
+        }
+
+
+        public void Save()
+        {
+            var fields = new StringBuilder();
+            var values = new StringBuilder();
+            var obj_fields = this.GetType().GetProperties().ToArray();
+            var tableName = this.GetType().GetField("tableName", BindingFlags.Public | BindingFlags.Static).GetValue(this);
+
+            foreach (var field in obj_fields)
+            {
+                fields.Append("`" + field.Name.ToLower().ToString() + "`");
+                if (field.PropertyType != typeof(DateTime))
+                {
+                    values.Append("'" + field.GetValue(this) + "'");
+                }
+                else
+                {
+                    values.Append("'" + ((DateTime)field.GetValue(this)).ToString("yyyy-MM-dd HH:mm:ss") + "'");
+                }
+                if (field != obj_fields.Last())
+                {
+                    fields.Append(", ");
+                    values.Append(", ");
+                }
+            }
+            var sql = $"INSERT INTO {tableName} ({fields.ToString()}) VALUES ({values.ToString()})";
+            this.dataBase.ExecuteCommand(sql);
+
+            sql = $"SELECT ID FROM `{tableName}` ORDER BY ID DESC LIMIT 1";
+            var result = int.Parse(this.dataBase.GetResponse(sql)[0][0]);
+            Console.WriteLine(result);
+            Id = result;
+
+        }
+
+        public void Update()
+        {
+            var query = new StringBuilder();
+            var obj_fields = this.GetType().GetProperties().ToArray();
+            var tableName = this.GetType().GetField("tableName", BindingFlags.Public | BindingFlags.Static).GetValue(this);
+
+            foreach (var field in obj_fields)
+            {
+                if (field.Name != "Id")
+                {
+                    query.Append("`" + field.Name.ToLower().ToString() + "`");
+                    query.Append("= '" + field.GetValue(this) + "'");
+                    if (field != obj_fields.Last())
+                    {
+                        query.Append(", ");
+                    }
+                }
+            }
+            var sql = $"UPDATE `{tableName}` SET {query.ToString()}  WHERE `{tableName}`.`id` = {this.Id}";
+            Console.WriteLine(sql);
+            this.dataBase.ExecuteCommand(sql);
+        }
+
+        public void Delete()
+        {
+            var tableName = this.GetType().GetField("tableName", BindingFlags.Public | BindingFlags.Static).GetValue(this);
+            var sql = $"DELETE FROM `{tableName}` WHERE `{tableName}`.`id` = {this.GetType().GetProperty("Id").GetValue(this)}";
+            Console.WriteLine(sql);
+            this.dataBase.ExecuteCommand(sql);
         }
 
         public override string ToString()
@@ -248,6 +268,7 @@ namespace testing_class
 
     public class Runner : DB_object
     {
+        public static string tableName;
         public string Name { get; set; }
         private int age;
         public int Age
@@ -274,9 +295,14 @@ namespace testing_class
             }
         }
 
+        static Runner()
+        {
+            tableName = "runner";
+        }
+
         public Runner(): base() { }
 
-        public Runner(DataBase dataBase, string tableName, string name, int age, string sex, int? id = null) : base(dataBase, tableName, id)
+        public Runner(DataBase dataBase, string name, int age, string sex, int? id = null) : base(dataBase, id)
         {
             this.Name = name;
             this.Age = age;
@@ -286,12 +312,17 @@ namespace testing_class
 
     public class Race : DB_object
     {
-        public int? Id { get; set; }
+        public static string tableName;
         public DateTime Beginning_time { get; set; }
+
+        static Race()
+        {
+            tableName = "race";
+        }
 
         public Race(): base() {}
 
-        public Race(DataBase dataBase, string tableName, DateTime beginning_time, int? id=null): base(dataBase, tableName, id)
+        public Race(DataBase dataBase, DateTime beginning_time, int? id=null): base(dataBase, id)
         {
             Beginning_time = beginning_time;
         }
@@ -299,16 +330,22 @@ namespace testing_class
 
     public class RunnersTime: DB_object
     {
+        public static string tableName;
         public int? Runner_id {  get; set; }
         public int? Race_id {  get; set; }
         public DateTime Start_time { get; set; }
         public DateTime Finish_time { get; set; }
         public string Status {  get; set; }
 
+        static RunnersTime()
+        {
+            tableName = "runners_time";
+        }
+
         public RunnersTime(): base() { }
 
-        public RunnersTime(DataBase dataBase, string tableName, Runner runner, Race race, DateTime start_time,
-            DateTime finish_time, string status, int? id = null): base(dataBase, tableName, id)
+        public RunnersTime(DataBase dataBase, Runner runner, Race race, DateTime start_time,
+            DateTime finish_time, string status, int? id = null): base(dataBase, id)
         {
             Runner_id = runner.Id;
             Race_id = race.Id;
